@@ -1,40 +1,25 @@
 #!/usr/bin/env bash
 
-# Set up Seth's usual Arch Linux workstation.
-# Run this as the desktop user, not as root. The script is safe to rerun.
+# Fresh Arch workstation setup based on systemsetup.txt.
+# Run as the desktop user from inside a logged-in Plasma session.
 
-set -Eeuo pipefail
+set -uo pipefail
 
 readonly SCRIPT_NAME=${0##*/}
 SKIP_CACHYOS=false
 SKIP_KDE=false
+FAILURES=()
 
-log() {
-    printf '\n[%s] %s\n' "$SCRIPT_NAME" "$*"
-}
+log()  { printf '\n\033[1;34m[%s] %s\033[0m\n' "$SCRIPT_NAME" "$*"; }
+ok()   { printf '\033[1;32m  OK:\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m  WARNING:\033[0m %s\n' "$*" >&2; }
+fail() { printf '\033[1;31m  FAILED:\033[0m %s\n' "$*" >&2; FAILURES+=("$*"); }
+die()  { printf '\033[1;31m[%s] ERROR: %s\033[0m\n' "$SCRIPT_NAME" "$*" >&2; exit 1; }
 
-warn() {
-    printf '\n[%s] WARNING: %s\n' "$SCRIPT_NAME" "$*" >&2
-}
-
-die() {
-    printf '\n[%s] ERROR: %s\n' "$SCRIPT_NAME" "$*" >&2
-    exit 1
-}
-
-usage() {
-    cat <<EOF
-Usage: ./$SCRIPT_NAME [OPTIONS]
-
-Options:
-  --skip-cachyos  Do not add/update the CachyOS repositories
-  --skip-kde      Do not change Plasma appearance or panel settings
-  -h, --help      Show this help
-EOF
-}
+usage() { printf 'Usage: ./%s [--skip-cachyos] [--skip-kde]\n' "$SCRIPT_NAME"; }
 
 while (($#)); do
-    case "$1" in
+    case $1 in
         --skip-cachyos) SKIP_CACHYOS=true ;;
         --skip-kde) SKIP_KDE=true ;;
         -h|--help) usage; exit 0 ;;
@@ -43,61 +28,140 @@ while (($#)); do
     shift
 done
 
-[[ $EUID -ne 0 ]] || die "Run this as your normal desktop user; sudo is used only where needed."
-command -v pacman >/dev/null || die "This script is intended for Arch Linux or an Arch-based system."
-command -v flatpak >/dev/null || die "Flatpak must be installed before running this script."
+[[ $EUID -ne 0 ]] || die "Run this as your normal desktop user, not with sudo."
+command -v pacman >/dev/null || die "pacman was not found; this script requires Arch Linux."
+command -v flatpak >/dev/null || die "Install Flatpak before running this script."
 command -v sudo >/dev/null || die "sudo is required."
 
-sudo -v
+log "Phase 1/7: preflight and administrator access"
+sudo -v || die "Could not obtain sudo access."
 
-install_cachyos_repositories() {
-    if grep -Eq '^\[cachyos([]-]|])' /etc/pacman.conf; then
-        log "CachyOS repositories are already configured."
-        return
+install_arch_package() {
+    local package=$1
+    if pacman -Q "$package" >/dev/null 2>&1; then
+        ok "$package is already installed"
+    elif sudo pacman -S --needed --noconfirm "$package"; then
+        ok "installed $package"
+    else
+        fail "could not install package: $package"
+        return 1
     fi
-
-    log "Adding the official CachyOS repositories (the installer selects your CPU level)."
-    local work_dir archive
-    work_dir=$(mktemp -d)
-    archive="$work_dir/cachyos-repo.tar.xz"
-    trap 'rm -rf -- "$work_dir"' RETURN
-
-    curl --fail --location --proto '=https' --tlsv1.2 \
-        https://mirror.cachyos.org/cachyos-repo.tar.xz \
-        --output "$archive"
-    tar -xJf "$archive" -C "$work_dir"
-    [[ -x $work_dir/cachyos-repo/cachyos-repo.sh ]] || \
-        die "The downloaded CachyOS repository installer did not have the expected layout."
-    sudo "$work_dir/cachyos-repo/cachyos-repo.sh"
 }
 
-if ! $SKIP_CACHYOS; then
-    command -v curl >/dev/null || sudo pacman -S --needed --noconfirm curl
-    install_cachyos_repositories
+install_replacing_package() {
+    local package=$1
+    if pacman -Q "$package" >/dev/null 2>&1; then
+        ok "$package is already installed"
+    # Question bit 4 approves removal of packages that conflict with the
+    # requested replacement; other normally-negative questions stay negative.
+    elif sudo pacman -S --needed --noconfirm --ask=4 "$package"; then
+        ok "installed $package and replaced its stable counterpart"
+    else
+        fail "could not install replacement package: $package"
+        return 1
+    fi
+}
+
+add_cachyos_repositories() {
+    if grep -Eq '^\[cachyos([[:alnum:]-]*)\]' /etc/pacman.conf; then
+        ok "CachyOS repositories are already present"
+        return 0
+    fi
+
+    command -v curl >/dev/null || install_arch_package curl || return 1
+
+    local work_dir archive repo_dir
+    work_dir=$(mktemp -d) || return 1
+    archive="$work_dir/cachyos-repo.tar.xz"
+
+    if ! curl --fail --location --proto '=https' --tlsv1.2 \
+        https://mirror.cachyos.org/cachyos-repo.tar.xz --output "$archive"; then
+        fail "could not download the official CachyOS repository installer"
+        rm -rf -- "$work_dir"
+        return 1
+    fi
+    if ! tar -xJf "$archive" -C "$work_dir"; then
+        fail "could not extract the CachyOS repository installer"
+        rm -rf -- "$work_dir"
+        return 1
+    fi
+
+    repo_dir="$work_dir/cachyos-repo"
+    if [[ ! -x $repo_dir/cachyos-repo.sh ]]; then
+        fail "the CachyOS download did not contain cachyos-repo/cachyos-repo.sh"
+        rm -rf -- "$work_dir"
+        return 1
+    fi
+
+    # The upstream script uses relative files, so it must run from its directory.
+    if (cd "$repo_dir" && sudo ./cachyos-repo.sh); then
+        ok "CachyOS repositories added"
+        rm -rf -- "$work_dir"
+        return 0
+    fi
+
+    fail "the official CachyOS repository installer returned an error"
+    rm -rf -- "$work_dir"
+    return 1
+}
+
+log "Phase 2/7: CachyOS repositories"
+if $SKIP_CACHYOS; then
+    warn "CachyOS setup skipped by request"
+else
+    add_cachyos_repositories || true
 fi
 
-log "Updating the system and installing native packages."
-native_packages=(
-    amd-ucode
-    archiso
-    cmake
-    code
-    davinci-resolve
-    gnome-boxes
-    # CachyOS mesa-git includes Radeon Vulkan and provides opencl-mesa/opencl-driver.
-    mesa-git
-    oxygen
-    oxygen-sounds
-    reaper
-)
-sudo pacman -Syu --needed --noconfirm "${native_packages[@]}"
-if ! pacman -T opencl-driver >/dev/null 2>&1; then
-    die "No OpenCL driver is installed; DaVinci Resolve will not work with the AMD GPU."
+log "Phase 3/7: full system upgrade"
+if sudo pacman -Syu --noconfirm; then
+    ok "system upgraded"
+else
+    fail "full system upgrade failed; package installs will still be attempted"
 fi
 
-log "Enabling Flathub and installing Flatpak applications."
-flatpak remote-add --user --if-not-exists flathub \
-    https://dl.flathub.org/repo/flathub.flatpakrepo
+log "Phase 4/7: native applications and tools"
+arch_packages=(amd-ucode archiso cmake code gnome-boxes oxygen oxygen-sounds)
+for package in "${arch_packages[@]}"; do
+    install_arch_package "$package" || true
+done
+
+log "Phase 5/7: experimental AMD graphics, OpenCL, DaVinci Resolve, and REAPER"
+# CachyOS mesa-git replaces stable Mesa/Vulkan and provides opencl-mesa and
+# opencl-driver. It must be installed before DaVinci Resolve.
+install_replacing_package mesa-git || true
+
+if pacman -Q lib32-mesa >/dev/null 2>&1 || pacman -Q lib32-mesa-git >/dev/null 2>&1; then
+    install_replacing_package lib32-mesa-git || true
+fi
+
+if pacman -T opencl-driver >/dev/null 2>&1; then
+    ok "an OpenCL driver is installed"
+else
+    fail "no OpenCL driver is installed after mesa-git"
+fi
+
+install_arch_package davinci-resolve || true
+install_arch_package reaper || true
+
+install_flatpak_app() {
+    local app_id=$1
+    if flatpak info --user "$app_id" >/dev/null 2>&1 || \
+       flatpak info --system "$app_id" >/dev/null 2>&1; then
+        ok "$app_id is already installed"
+    elif flatpak install --user --noninteractive --or-update flathub "$app_id"; then
+        ok "installed $app_id"
+    else
+        fail "could not install Flatpak: $app_id"
+    fi
+}
+
+log "Phase 6/7: Flatpak applications and their required runtimes"
+if flatpak remote-add --user --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo; then
+    ok "Flathub is configured"
+else
+    fail "could not configure Flathub"
+fi
 
 flatpak_apps=(
     com.anydesk.Anydesk
@@ -107,53 +171,53 @@ flatpak_apps=(
     org.prismlauncher.PrismLauncher
     org.vinegarhq.Sober
 )
-
 for app_id in "${flatpak_apps[@]}"; do
-    if ! flatpak install --user --noninteractive --or-update flathub "$app_id"; then
-        warn "Could not install $app_id; continuing with the remaining applications."
-    fi
+    install_flatpak_app "$app_id"
 done
 
+# The Freedesktop/GNOME/KDE platforms, Mesa/GL32, codecs, Wine Gecko/Mono,
+# Breeze GTK theme, and AMD AMF entries are dependency-managed runtimes and
+# extensions. Installing the apps resolves their correct current branches.
+if flatpak update --user --noninteractive; then
+    ok "Flatpak applications, runtimes, and extensions updated"
+else
+    fail "one or more Flatpak runtimes/extensions could not be updated"
+fi
+
 configure_plasma() {
-    [[ ${XDG_CURRENT_DESKTOP:-} == *KDE* ]] || {
-        warn "A KDE Plasma session was not detected; skipping desktop customization."
+    local writer qdbus_cmd panel_script
+    writer=$(command -v kwriteconfig6 || command -v kwriteconfig5 || true)
+    qdbus_cmd=$(command -v qdbus6 || command -v qdbus || true)
+
+    if [[ -z $writer ]]; then
+        fail "kwriteconfig was not found; Plasma appearance could not be configured"
         return
-    }
-
-    log "Applying the Oxygen look, blue accent, cursor, splash screen, and sounds."
-
-    if command -v plasma-apply-lookandfeel >/dev/null; then
-        plasma-apply-lookandfeel --apply org.kde.oxygen.desktop || \
-            warn "The Oxygen global theme could not be applied automatically."
-    elif command -v lookandfeeltool >/dev/null; then
-        lookandfeeltool -a org.kde.oxygen.desktop || \
-            warn "The Oxygen global theme could not be applied automatically."
     fi
+
+    if command -v plasma-apply-colorscheme >/dev/null; then
+        plasma-apply-colorscheme OxygenDark || \
+            warn "OxygenDark was not listed; writing the setting directly"
+    fi
+    "$writer" --file kdeglobals --group General --key ColorScheme OxygenDark
+    "$writer" --file kdeglobals --group General --key AccentColor '61,174,233'
+    "$writer" --file kdeglobals --group KDE --key widgetStyle oxygen
+    "$writer" --file plasmarc --group Theme --key name oxygen
+    "$writer" --file kdeglobals --group Sounds --key Theme oxygen
+    "$writer" --file ksplashrc --group KSplash --key Engine KSplashQML
+    "$writer" --file ksplashrc --group KSplash --key Theme org.kde.air
+    "$writer" --file kcminputrc --group Mouse --key cursorTheme Oxygen_Zion
 
     if command -v plasma-apply-cursortheme >/dev/null; then
         plasma-apply-cursortheme Oxygen_Zion || \
-            warn "Oxygen Zion was not found; choose it manually in System Settings."
+            warn "the cursor command did not recognize Oxygen_Zion; config was still written"
     fi
 
-    local config_writer
-    config_writer=$(command -v kwriteconfig6 || command -v kwriteconfig5 || true)
-    if [[ -n $config_writer ]]; then
-        "$config_writer" --file kdeglobals --group General --key AccentColor '61,174,233'
-        "$config_writer" --file plasmarc --group Theme --key name oxygen
-        "$config_writer" --file plasmarc --group Sounds --key Theme oxygen
-        "$config_writer" --file ksplashrc --group KSplash --key Theme org.kde.air.desktop
-        "$config_writer" --file ksplashrc --group KSplash --key Engine KSplashQML
-    fi
-
-    local qdbus_cmd
-    qdbus_cmd=$(command -v qdbus6 || command -v qdbus || true)
-    if [[ -z $qdbus_cmd ]]; then
-        warn "qdbus was not found; panel settings must be applied manually."
+    if [[ -z $qdbus_cmd ]] || ! "$qdbus_cmd" org.kde.plasmashell /PlasmaShell \
+        org.kde.PlasmaShell.evaluateScript 'print("ready")' >/dev/null 2>&1; then
+        fail "Plasma is not running in this user session; panel settings could not be applied"
         return
     fi
 
-    log "Updating each Plasma panel: centered, fit-content, dodge windows, translucent, floating, 46 px."
-    local panel_script
     panel_script=$(cat <<'JAVASCRIPT'
 for (const panel of panels()) {
     panel.alignment = "center";
@@ -165,13 +229,29 @@ for (const panel of panels()) {
 }
 JAVASCRIPT
 )
-    "$qdbus_cmd" org.kde.plasmashell /PlasmaShell \
-        org.kde.PlasmaShell.evaluateScript "$panel_script" || \
-        warn "Plasma rejected the panel update; apply those settings manually."
+    if "$qdbus_cmd" org.kde.plasmashell /PlasmaShell \
+        org.kde.PlasmaShell.evaluateScript "$panel_script"; then
+        ok "Plasma appearance and panels configured"
+    else
+        fail "Plasma rejected the panel configuration"
+    fi
 }
 
-if ! $SKIP_KDE; then
+log "Phase 7/7: KDE Plasma appearance and panels"
+if $SKIP_KDE; then
+    warn "KDE setup skipped by request"
+else
     configure_plasma
 fi
 
-log "Setup complete. Log out and back in (or reboot) to ensure all desktop and driver changes take effect."
+printf '\n\033[1mSetup summary\033[0m\n'
+if ((${#FAILURES[@]} == 0)); then
+    printf '\033[1;32mEverything in systemsetup.txt completed successfully.\033[0m\n'
+    printf 'Reboot to load the updated graphics stack and desktop settings.\n'
+    exit 0
+fi
+
+printf '\033[1;33mCompleted all phases, but %d item(s) need attention:\033[0m\n' "${#FAILURES[@]}"
+printf '  - %s\n' "${FAILURES[@]}"
+printf 'Fix the listed item(s), then rerun this script; completed work will be skipped.\n'
+exit 1
