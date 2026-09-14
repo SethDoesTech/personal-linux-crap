@@ -1,0 +1,1 @@
+This is my personal repo of small stuff I use all the time. Take, change, modify, redistribute and use as you please. Just don't explode please. 
