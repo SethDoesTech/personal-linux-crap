@@ -99,7 +99,7 @@ else
 fi
 
 log "Phase 4/6: native applications, tools, and KDE theme packages"
-packages=(amd-ucode archiso cmake code gnome-boxes oxygen oxygen-sounds)
+packages=(amd-ucode archiso cmake code gnome-boxes oxygen oxygen-icons oxygen-sounds)
 for package in "${packages[@]}"; do
     install_package "$package" || true
 done

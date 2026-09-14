@@ -20,15 +20,36 @@ qdbus_cmd=$(command -v qdbus6 || command -v qdbus || true)
 [[ -n $writer ]] || die "kwriteconfig was not found. Run packagedump.sh first."
 
 printf '\n\033[1;34m[%s] Applying Oxygen Dark and the blue accent\033[0m\n' "$SCRIPT_NAME"
-if command -v plasma-apply-colorscheme >/dev/null; then
-    plasma-apply-colorscheme OxygenDark || \
-        warn "OxygenDark was not listed; writing its configuration directly"
-fi
 "$writer" --file kdeglobals --group General --key ColorScheme OxygenDark
-"$writer" --file kdeglobals --group General --key AccentColor '61,174,233'
 "$writer" --file kdeglobals --group KDE --key widgetStyle oxygen
 "$writer" --file plasmarc --group Theme --key name oxygen
-ok "Oxygen Dark with blue accent configured"
+
+# Apply the scheme first because doing so overwrites the accent. Then disable
+# wallpaper-derived accents and apply KDE's standard light blue (#3daee9).
+if command -v plasma-apply-colorscheme >/dev/null; then
+    plasma-apply-colorscheme OxygenDark || \
+        warn "OxygenDark was not listed; its configuration was written directly"
+fi
+"$writer" --file kdeglobals --group General --key accentColorFromWallpaper false
+"$writer" --file kdeglobals --group General --key AccentColor '61,174,233'
+if command -v plasma-apply-colorscheme >/dev/null && \
+   plasma-apply-colorscheme --accent-color '#3daee9'; then
+    ok "Oxygen Dark with light-blue accent applied"
+else
+    warn "accent helper was unavailable; light blue was saved for the next login"
+fi
+
+printf '\n\033[1;34m[%s] Applying Oxygen icons system-wide\033[0m\n' "$SCRIPT_NAME"
+"$writer" --file kdeglobals --group Icons --key Theme oxygen
+if command -v plasma-changeicons >/dev/null; then
+    if plasma-changeicons oxygen; then
+        ok "Oxygen icons applied to KDE and the application launcher"
+    else
+        fail "the Oxygen icon theme could not be applied"
+    fi
+else
+    warn "icon-theme helper not found; Oxygen was written as the global theme for the next login"
+fi
 
 printf '\n\033[1;34m[%s] Applying Oxygen Zion pointers\033[0m\n' "$SCRIPT_NAME"
 "$writer" --file kcminputrc --group Mouse --key cursorTheme Oxygen_Zion
