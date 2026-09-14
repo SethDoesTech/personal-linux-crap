@@ -64,10 +64,15 @@ else
 fi
 
 printf '\n\033[1;34m[%s] Applying Air splash and Oxygen sounds\033[0m\n' "$SCRIPT_NAME"
-"$writer" --file ksplashrc --group KSplash --key Engine KSplashQML
-"$writer" --file ksplashrc --group KSplash --key Theme org.kde.air
+"$writer" --file ksplashrc --group KSplash --key Engine --delete
+if [[ -f /usr/share/plasma/look-and-feel/org.kde.air/contents/splash/Splash.qml ]]; then
+    "$writer" --file ksplashrc --group KSplash --key Theme org.kde.air
+    ok "Air post-login splash configured"
+else
+    fail "Air splash assets are missing; rerun packagedump.sh to install oxygen"
+fi
 "$writer" --file kdeglobals --group Sounds --key Theme oxygen
-ok "Air splash and Oxygen sound theme configured"
+ok "Oxygen sound theme configured"
 
 printf '\n\033[1;34m[%s] Configuring Plasma panels\033[0m\n' "$SCRIPT_NAME"
 if [[ -z $qdbus_cmd ]] || ! "$qdbus_cmd" org.kde.plasmashell /PlasmaShell \
