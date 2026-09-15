@@ -1,0 +1,3 @@
+To add your name and email to Git, use the following commands in your terminal: 
+git config --global user.name "Your Name" 
+git config --global user.email "you@example.com"
