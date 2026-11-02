@@ -1,0 +1,31 @@
+This folder is full of example code to give an AI, here are some prompts to use.
+
+With cachy-repo I use a tiny prompt wwith that tiny script for a little burst test:
+
+Analyze the function of this shell script
+
+Then for starch-xfce I like to take it up a little, it's a larger script:
+
+Analyze the function of this shell script. Write a new shorter, more reliable version and give technical explanation of the new version, old version and why you chose to make the changes you did. 
+
+mega-fastfetch is a huge script, so we do big prompt:
+
+Analyze the attached 500-line Bash script, Mega Fastfetch.
+
+Treat this as a real Linux utility intended for distribution to end users.
+
+Your tasks:
+
+1. Perform a thorough code review for correctness, security, portability, and performance.
+2. Identify edge cases across Arch, Debian, Fedora, Gentoo, Void, and Alpine Linux.
+3. Evaluate how accurately it detects hardware, drivers, package managers, and init systems.
+4. Identify possible failures involving missing dependencies, restricted permissions, containers, and unusual hardware.
+5. Find any incorrect package-counting logic.
+6. Suggest improvements to output formatting and execution speed.
+7. Fix all confirmed bugs without removing existing features.
+8. Preserve compatibility with Bash and avoid unnecessary dependencies.
+9. Return the complete revised script, followed by a detailed changelog.
+
+Do not provide placeholder implementations. Every proposed fix must contain functional Bash code.
+
+Prioritize correctness over stylistic preferences.
