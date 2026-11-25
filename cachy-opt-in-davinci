@@ -1,0 +1,37 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Abort if any CachyOS repositories are already configured
+if pacman-conf --repo-list | grep -q '^cachyos'; then
+    echo "CachyOS repositories are already configured."
+    echo "Aborting to avoid unintended package replacements."
+    exit 1
+fi
+
+# Import and trust the CachyOS signing key
+sudo pacman-key --recv-keys F3B607488DB35A47 \
+    --keyserver keyserver.ubuntu.com
+sudo pacman-key --lsign-key F3B607488DB35A47
+
+# Install the CachyOS keyring
+sudo pacman -U --needed \
+    https://mirror.cachyos.org/repo/x86_64/cachyos/cachyos-keyring-20240331-1-any.pkg.tar.zst
+
+# Back up the existing Pacman configuration
+sudo cp /etc/pacman.conf \
+    "/etc/pacman.conf.bak.$(date +%s)"
+
+# Append the restricted CachyOS repository
+sudo tee -a /etc/pacman.conf > /dev/null <<'EOF'
+
+[cachyos]
+SigLevel = Required DatabaseOptional
+Server = https://mirror.cachyos.org/repo/$arch/$repo
+Usage = Sync Search
+EOF
+
+# Update the system and explicitly install DaVinci Resolve
+sudo pacman -Syu --needed cachyos/davinci-resolve
+
+echo "DaVinci Resolve installation complete."
